@@ -50,20 +50,20 @@ class Net(object):
         grad_b_j = [0.0] * self.n_layers
         for (x, y) in self.examples:
             # 1. feed forward
-            activation = [x]
-            for w in weights:
-                z = psi(activation[-1], w)
-                activation.append(sigmoid(z))
+            activation = {0 : x}
+            for i in xrange(self.n_layers):
+                w = weights[i]
+                z = psi(activation[i], w)
+                activation[i + 1] = sigmoid(z)
             # 2. output layer
-            delta = [
-                -(y - activation[-1]) * activation[-1] * (1.0 - activation[-1])
-            ]
+            delta = {
+                self.n_layers : -(y - activation[self.n_layers]) * activation[self.n_layers] * (1.0 - activation[self.n_layers])
+            }
             # 3. hidden layers
-            for w, a in reversed(zip(weights, activation)):
-                delta.append(
-                    numpy.dot(w[:, :-1].T, delta[-1]) * a * (1.0 - a)
-                )
-            delta = list(reversed(delta))
+            for i in xrange(self.n_layers - 1, 0, -1):
+                w = weights[i - 1]
+                a = activation[i]
+                delta[i] = numpy.dot(w[:, :-1], delta[i + 1]) * a * (1.0 - a)
             # 4. compute partial derivatives
             for i in xrange(self.n_layers):
                 d = delta[i + 1]
@@ -140,16 +140,12 @@ def main():
     weights = [
         numpy.random.normal(0.0, 0.1, (n, m + 1)),
     #    numpy.random.normal(0.0, 0.01, (n, n + 1)),
-        numpy.random.normal(0.0, 0.1, (m, n + 1)),
-    ]
-
-    weights = [
-        numpy.random.normal(0.0, 0.1, (m, m + 1)),
+    #   numpy.random.normal(0.0, 0.1, (m, n + 1)),
     ]
     
     examples = [(x, y)] * 1
 
-    net = Net(map(lambda x : x.shape, weights), lmbda = 0.1, examples = examples)
+    net = Net(map(lambda x : x.shape, weights), lmbda = 0.0, examples = examples)
     print 'evaluate objective'
     obj = net.evaluate_objective(weights)
     print '\tobj %s' % str(obj)
