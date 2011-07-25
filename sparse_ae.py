@@ -130,14 +130,14 @@ class Net(object):
 
     def evaluate_objective(self, weights):
         n_examples = len(self.examples)
-        r = numpy.zeros((self.layer_shapes[-1][0], ), dtype = numpy.float)
+        r = 0.0
         for i, (x, y) in enumerate(self.examples):
             activation = [x]
             for w in weights:
                 z = psi(activation[-1], w)
                 activation.append(sigmoid(z))
-            r += (activation[-1] - y) ** 2
-        error_term = 0.5 * numpy.mean(r)
+            r += numpy.sum((activation[-1] - y) ** 2)
+        error_term = 0.5 * r / float(n_examples)
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
         obj = error_term + self.lmbda * penalty_term
@@ -192,8 +192,8 @@ def test_flatten_unflatten(net):
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
 def main():
-    m = 1 # n input (& output) nodes
-    n = 1 # n hidden nodes
+    m = 5 # n input (& output) nodes
+    n = 3 # n hidden nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
     y = numpy.random.uniform(-1.0, 1.0, (m, ))
