@@ -161,24 +161,32 @@ class Net(object):
             )
         return grad_objective
 
+def make_gradient_approx(f, h):
+    def approx_grad_f(x_0):
+        n = len(x_0)
+        approx_g = numpy.zeros(x_0.shape, dtype = x_0.dtype)
+        for i in xrange(n):
+            e_i = numpy.zeros(x_0.shape, dtype = x_0.dtype)
+            e_i[i] = 1.0
+            approx_g[i] = (f(x_0 + (h * e_i)) - f(x_0 - (h * e_i))) / (2.0 * h)
+        return approx_g
+    return approx_grad_f
+     
+
 def test_gradient(f, grad_f, x_0, h, tol):
     n = len(x_0)
     g = grad_f(x_0)
-    approx_g = numpy.zeros(g.shape, dtype = g.dtype)
-    for i in xrange(n):
-        print 'checking %d of %d' % (i, n)
-        e_i = numpy.zeros(x_0.shape, dtype = x_0.dtype)
-        e_i[i] = 1.0
-        approx_g[i] = (f(x_0 + (h * e_i)) - f(x_0 - (h * e_i))) / (2.0 * h)
+    approx_grad_f = make_gradient_approx(f, h)
+    approx_g = approx_grad_f(x_0)
     error = sup_norm(g - approx_g)
     print error
     if error >= tol:
         print 'g:'
         print g
-        print 'approx_g:'
+        print 'g_numeric:'
         print approx_g
-        print 'residual:'
-        print g - approx_g
+        print 'relative residual:'
+        print (g - approx_g) / numpy.abs(approx_g)
 
 def test_flatten_unflatten(net):
     noise = lambda shape : numpy.random.normal(0.0, 1.0, shape)
@@ -187,15 +195,15 @@ def test_flatten_unflatten(net):
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
 def main():
-    m = 3 # n input (& output) nodes
-    n = 3 # n hidden nodes
+    m = 5 # n input (& output) nodes
+    n = 2 # n hidden nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
     y = numpy.random.uniform(-1.0, 1.0, (m, ))
 
     weights = [
         numpy.random.normal(0.0, 0.1, (n, m + 1)),
-        numpy.random.normal(0.0, 0.1, (n, n + 1)),
+        #     numpy.random.normal(0.0, 0.1, (n, n + 1)),
         numpy.random.normal(0.0, 0.1, (m, n + 1)),
     ]
     
@@ -206,21 +214,25 @@ def main():
     obj = net.evaluate_objective(weights)
     print '\tobj %s' % str(obj)
 
-    f = lambda w : net.evaluate_objective(net.unflatten_weights(w))
+    def f(w):
+        obj = net.evaluate_objective(net.unflatten_weights(w))
+        print '-- obj : %e' % obj
+        return obj
+
     grad_f = lambda w : net.flatten_weights(net.evaluate_gradient(net.unflatten_weights(w)))
+    # grad_f = make_gradient_approx(f, h = 1e-5)
 
     test_flatten_unflatten(net)
 
     test_gradient(f, grad_f, net.flatten_weights(weights), h = 1.0e-4, tol = 1.0e-5)
     
     print 'minimise via cg'
-    result = scipy.optimize.fmin_cg(
+    w_opt = scipy.optimize.fmin_cg(
         f = f,
         x0 = net.flatten_weights(weights),
         fprime = grad_f,
     )
-    w_opt = result[0]
-    obj_opt = result[1]
+    obj_opt = f(w_opt)
     print 'obj_opt : %s' % str(obj_opt)
 
 
