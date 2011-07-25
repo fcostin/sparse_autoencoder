@@ -148,10 +148,6 @@ class Net(object):
         if n_examples < 1:
             raise ValueError('need at least 1 example')
         grad_w = self.backprop_v2(weights)
-        for w in grad_w:
-            print w.shape
-        for w in weights:
-            print w.shape
         grad_objective = []
         for i in xrange(self.n_layers):
             w_i = grad_w[i][:, :-1]
@@ -183,7 +179,6 @@ def test_gradient(f, grad_f, x_0, h, tol):
         print approx_g
         print 'residual:'
         print g - approx_g
-        1/0
 
 def test_flatten_unflatten(net):
     noise = lambda shape : numpy.random.normal(0.0, 1.0, shape)
@@ -192,7 +187,7 @@ def test_flatten_unflatten(net):
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
 def main():
-    m = 5 # n input (& output) nodes
+    m = 3 # n input (& output) nodes
     n = 3 # n hidden nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
@@ -200,11 +195,11 @@ def main():
 
     weights = [
         numpy.random.normal(0.0, 0.1, (n, m + 1)),
-    #    numpy.random.normal(0.0, 0.01, (n, n + 1)),
+        numpy.random.normal(0.0, 0.1, (n, n + 1)),
         numpy.random.normal(0.0, 0.1, (m, n + 1)),
     ]
     
-    examples = [(x, y)] * 1
+    examples = [(x, y)] * 17
 
     net = Net(map(lambda x : x.shape, weights), lmbda = 0.0, examples = examples)
     print 'evaluate objective'
