@@ -56,7 +56,7 @@ class Net(object):
             i += size
         return weights
 
-    def backprop_v2(self, weights):
+    def backprop(self, weights):
 
         alpha_cache = {}
         alpha_prime_cache = {}
@@ -126,7 +126,7 @@ class Net(object):
         n_examples = len(self.examples)
         if n_examples < 1:
             raise ValueError('need at least 1 example')
-        grad_w = self.backprop_v2(weights)
+        grad_w = self.backprop(weights)
         grad_objective = []
         for i in xrange(self.n_layers):
             w_i = grad_w[i][:, :-1]
@@ -172,10 +172,29 @@ def test_flatten_unflatten(net):
     weights_tilde = net.unflatten_weights(net.flatten_weights(weights))
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
+def bfgs(f, grad_f, x_0):
+    w_opt = scipy.optimize.fmin_bfgs(
+        f = f,
+        x0 = x_0,
+        fprime = grad_f,
+    )
+    obj_opt = f(w_opt)
+    return (w_opt, obj_opt)
+
+def lbfgs(f, grad_f, x_0):
+    w_opt, obj_opt, info = scipy.optimize.fmin_l_bfgs_b(
+        func = f,
+        x0 = x_0,
+        fprime = grad_f,
+    )
+    if info['warnflag'] != 0:
+        raise RuntimeError('cvgc failure, warnflag is %d' % info['warnflag'])
+    return (w_opt, obj_opt)
+
 def main():
-    m = 2 # n input nodes
-    n = 2 # n hidden nodes
-    o = 2 # n output nodes
+    m = 100 # n input nodes
+    n = 50 # n hidden nodes
+    o = 100 # n output nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
     y = numpy.random.uniform(-1.0, 1.0, (o, ))
@@ -185,7 +204,7 @@ def main():
         numpy.random.normal(0.0, 0.1, (o, n + 1)),
     ]
     
-    examples = [(x, y)] * 17
+    examples = [(x, y)] * 1700
 
     net = Net(map(lambda x : x.shape, weights), lmbda = 0.0, examples = examples)
     print 'evaluate objective'
@@ -201,24 +220,19 @@ def main():
         net.evaluate_gradient(net.unflatten_weights(w))
     )
 
-    test_flatten_unflatten(net)
-    assert_gradient_works(
-        f,
-        grad_f,
-        net.flatten_weights(weights),
-        h = 1.0e-4,
-        tol = 1.0e-5
-    )
+    if False:
+        test_flatten_unflatten(net)
+        assert_gradient_works(
+            f,
+            grad_f,
+            net.flatten_weights(weights),
+            h = 1.0e-4,
+            tol = 1.0e-5
+        )
 
-    print 'minimise via cg'
-    w_opt = scipy.optimize.fmin_cg(
-        f = f,
-        x0 = net.flatten_weights(weights),
-        fprime = grad_f,
-    )
-    obj_opt = f(w_opt)
+    print 'minimising objective with l-bfgs'
+    w_opt, obj_opt = lbfgs(f, grad_f, net.flatten_weights(weights))
     print 'obj_opt : %s' % str(obj_opt)
-
 
 def profile(func):
     import cProfile, pstats
