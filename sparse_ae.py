@@ -1,6 +1,17 @@
 import numpy
 import scipy.optimize
 
+def memoise(cache = None):
+    if cache is None:
+        cache = {}
+    def memoiser(f):
+        def memoised_f(*args):
+            if args not in cache:
+                cache[args] = f(*args)
+            return cache[args]
+        return memoised_f
+    return memoiser
+
 def sup_norm(x):
     return numpy.max(numpy.abs(x))
 
@@ -71,35 +82,85 @@ class Net(object):
                 grad_w_j[i] += numpy.multiply.outer(d, a)
                 grad_b_j[i] += d
         return (grad_w_j, grad_b_j)
-    
+
+    def backprop_v2(self, weights):
+
+        alpha_cache = {}
+        alpha_prime_cache = {}
+        delta_cache = {}
+        grad_w_cache = {}
+
+        cachery = (alpha_cache, alpha_prime_cache, delta_cache, grad_w_cache)
+
+        @memoise(alpha_cache)
+        def eval_alpha(i):
+            assert i > -1 #rely on manual caching of i = -1 case
+            # tack on bias input
+            x = numpy.hstack((eval_alpha(i - 1), 1.0))
+            return sigmoid(psi(eval_alpha(i-1), weights[i]))
+        
+        @memoise(alpha_prime_cache)
+        def eval_alpha_prime(i):
+            a = eval_alpha(i)
+            return a * (1.0 - a)
+        
+        @memoise(delta_cache)
+        def eval_delta(i):
+            assert 0 <= i < self.n_layers
+            if i == self.n_layers - 1:
+                return eval_alpha_prime(i) * (eval_alpha(i) - y)
+            else:
+                delta = numpy.hstack((eval_delta(i + 1), 1.0))
+                return numpy.dot(weights[i], delta) * eval_alpha_prime(i)
+
+        @memoise(grad_w_cache)
+        def eval_grad_w(i):
+            assert -1 <= i < self.n_layers -1
+            x = numpy.hstack((eval_alpha(i), 1.0))
+            return numpy.outer(eval_delta(i + 1), x)
+        
+        net_grad_w = [0.0] * self.n_layers
+        for (x, y) in self.examples:
+            alpha_cache[(-1, )] = x
+            for i in xrange(self.n_layers):
+                net_grad_w[i] += eval_grad_w(i - 1)
+            for cache in cachery:
+                cache.clear()
+        return net_grad_w
+
     def evaluate_objective(self, weights):
         n_examples = len(self.examples)
-        r = numpy.zeros((n_examples, self.layer_shapes[-1][0]), dtype = numpy.float)
+        r = numpy.zeros((self.layer_shapes[-1][0], ), dtype = numpy.float)
         for i, (x, y) in enumerate(self.examples):
             activation = [x]
             for w in weights:
                 z = psi(activation[-1], w)
                 activation.append(sigmoid(z))
-            r[i, :] = (activation[-1] - y) ** 2
-        error_term = 0.5 * numpy.mean(r ** 2)
+            r += (activation[-1] - y) ** 2
+        error_term = 0.5 * numpy.mean(r)
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
         obj = error_term + self.lmbda * penalty_term
-        print ' -- obj : %e' % obj
         return obj
     
     def evaluate_gradient(self, weights):
         n_examples = len(self.examples)
         if n_examples < 1:
             raise ValueError('need at least 1 example')
-        grad_w_j, grad_b_j = self.backprop(weights)
+        grad_w = self.backprop_v2(weights)
+        for w in grad_w:
+            print w.shape
+        for w in weights:
+            print w.shape
         grad_objective = []
         for i in xrange(self.n_layers):
+            w_i = grad_w[i][:, :-1]
+            bias_i = grad_w[i][:, -1]
             # n.b. weights for bias nodes are excempt from regularisation
             grad_objective.append(
                 numpy.hstack((
-                    (grad_w_j[i] / float(n_examples)) + self.lmbda * weights[i][:, :-1],
-                    (grad_b_j[i] / float(n_examples))[:, numpy.newaxis],
+                    (w_i / float(n_examples)) + self.lmbda * weights[i][:, :-1],
+                    (bias_i / float(n_examples))[:, numpy.newaxis],
                 ))
             )
         return grad_objective
@@ -140,7 +201,7 @@ def main():
     weights = [
         numpy.random.normal(0.0, 0.1, (n, m + 1)),
     #    numpy.random.normal(0.0, 0.01, (n, n + 1)),
-    #   numpy.random.normal(0.0, 0.1, (m, n + 1)),
+        numpy.random.normal(0.0, 0.1, (m, n + 1)),
     ]
     
     examples = [(x, y)] * 1
