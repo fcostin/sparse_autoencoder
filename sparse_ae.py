@@ -23,16 +23,26 @@ def sigmoid(z):
     """
     return 1.0 / (1.0 + numpy.exp(-z))
 
-def psi(x, w):
-    return numpy.dot(w, x)
+def kl_div(p, q):
+    """
+    KL divergence
+    """
+    return p * numpy.log(p / q) + (1.0 - p) * numpy.log((1.0 - p)/(1.0 - q))
+
+def kl_div_prime(p, q):
+    """
+    derivative of KL divergence wrt second argument q
+    """
+    return -p/q + (1.0 - p)/(1.0 - q)
 
 class Net(object):
-    def __init__(self, layer_shapes, lmbda, examples = None):
+    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, examples = None):
         self.n_layers = len(layer_shapes)
         self.layer_shapes = layer_shapes
         self.layer_sizes = map(numpy.product, layer_shapes)
         self.n_weights = sum(self.layer_sizes)
         self.lmbda = lmbda
+        self.beta = beta
         if examples is None:
             examples = []
         self.examples = examples
@@ -56,7 +66,19 @@ class Net(object):
             i += size
         return weights
 
-    def backprop(self, weights):
+    def backprop(self, weights, delta_bias = None):
+        """
+        arguments:
+            weights : list of 2d weight arrays (matrices)
+            delta_bias : (optional) mapping of int -> bias vector, where
+                the integer k satisifies 0 <= k < n_layers
+                and, if present, the shape of the bias vector for a layer
+                k matches the shape of the delta vector for that k
+        returns:
+            list of derivatives of net output with respect to layer weights,
+            where the i-th item is a 2d array of the same shape as the
+            i-th weight array, giving the corresponding partial derivatives.
+        """
 
         alpha_cache = {}
         alpha_prime_cache = {}
@@ -70,7 +92,7 @@ class Net(object):
             assert i > -1 #rely on manual caching of i = -1 case
             # tack on bias input
             x = numpy.hstack((eval_alpha(i - 1), 1.0))
-            return sigmoid(psi(x, weights[i]))
+            return sigmoid(numpy.dot(weights[i], x))
         
         @memoise(alpha_prime_cache)
         def eval_alpha_prime(i):
@@ -85,7 +107,10 @@ class Net(object):
                 return eval_alpha_prime(i) * (eval_alpha(i) - y)
             else:
                 delta = eval_delta(i + 1)
-                return numpy.dot(weights[i + 1][:, :-1].T, delta) * eval_alpha_prime(i)
+                x = numpy.dot(weights[i + 1][:, :-1].T, delta)
+                if delta_bias and i in delta_bias:
+                    x += delta_bias[i]
+                return x * eval_alpha_prime(i)
 
         @memoise(grad_w_cache)
         def eval_grad_w(i):
@@ -113,7 +138,7 @@ class Net(object):
         for i, (x, y) in enumerate(self.examples):
             a = x
             for w in weights:
-                z = psi(numpy.hstack((a, 1.0)), w)
+                z = numpy.dot(w, numpy.hstack((a, 1.0)))
                 a = sigmoid(z)
             r += numpy.sum((a - y) ** 2)
         error_term = 0.5 * r / float(n_examples)
@@ -157,13 +182,13 @@ def assert_gradient_works(f, grad_f, x_0, h, tol):
     approx_grad_f = make_gradient_approx(f, h)
     approx_g = approx_grad_f(x_0)
     error = sup_norm(g - approx_g) / sup_norm(approx_g)
-    print 'g:'
-    print g
-    print 'g_numeric:'
-    print approx_g
-    print 'relative residual:'
-    print (g - approx_g) / numpy.abs(approx_g)
     if error >= tol:
+        print 'g:'
+        print g
+        print 'g_numeric:'
+        print approx_g
+        print 'relative residual:'
+        print (g - approx_g) / numpy.abs(approx_g)
         raise ValueError('gradient is bad')
 
 def test_flatten_unflatten(net):
@@ -171,15 +196,6 @@ def test_flatten_unflatten(net):
     weights = [noise(s) for s in net.layer_shapes]
     weights_tilde = net.unflatten_weights(net.flatten_weights(weights))
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
-
-def bfgs(f, grad_f, x_0):
-    w_opt = scipy.optimize.fmin_bfgs(
-        f = f,
-        x0 = x_0,
-        fprime = grad_f,
-    )
-    obj_opt = f(w_opt)
-    return (w_opt, obj_opt)
 
 def lbfgs(f, grad_f, x_0):
     w_opt, obj_opt, info = scipy.optimize.fmin_l_bfgs_b(
@@ -192,9 +208,9 @@ def lbfgs(f, grad_f, x_0):
     return (w_opt, obj_opt)
 
 def main():
-    m = 100 # n input nodes
-    n = 50 # n hidden nodes
-    o = 100 # n output nodes
+    m = 10 # n input nodes
+    n = 5 # n hidden nodes
+    o = 10 # n output nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
     y = numpy.random.uniform(-1.0, 1.0, (o, ))
@@ -204,7 +220,7 @@ def main():
         numpy.random.normal(0.0, 0.1, (o, n + 1)),
     ]
     
-    examples = [(x, y)] * 1700
+    examples = [(x, y)] * 170
 
     net = Net(map(lambda x : x.shape, weights), lmbda = 0.0, examples = examples)
     print 'evaluate objective'
