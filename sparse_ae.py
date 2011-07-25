@@ -24,7 +24,7 @@ def sigmoid(z):
     return 1.0 / (1.0 + numpy.exp(-z))
 
 def psi(x, w):
-    return numpy.dot(w[:, :-1], x) + w[:, -1]
+    return numpy.dot(w, x)
 
 class Net(object):
     def __init__(self, layer_shapes, lmbda, examples = None):
@@ -56,33 +56,6 @@ class Net(object):
             i += size
         return weights
 
-    def backprop(self, weights):
-        grad_w_j = [0.0] * self.n_layers
-        grad_b_j = [0.0] * self.n_layers
-        for (x, y) in self.examples:
-            # 1. feed forward
-            activation = {0 : x}
-            for i in xrange(self.n_layers):
-                w = weights[i]
-                z = psi(activation[i], w)
-                activation[i + 1] = sigmoid(z)
-            # 2. output layer
-            delta = {
-                self.n_layers : -(y - activation[self.n_layers]) * activation[self.n_layers] * (1.0 - activation[self.n_layers])
-            }
-            # 3. hidden layers
-            for i in xrange(self.n_layers - 1, 0, -1):
-                w = weights[i - 1]
-                a = activation[i]
-                delta[i] = numpy.dot(w[:, :-1], delta[i + 1]) * a * (1.0 - a)
-            # 4. compute partial derivatives
-            for i in xrange(self.n_layers):
-                d = delta[i + 1]
-                a = activation[i]
-                grad_w_j[i] += numpy.multiply.outer(d, a)
-                grad_b_j[i] += d
-        return (grad_w_j, grad_b_j)
-
     def backprop_v2(self, weights):
 
         alpha_cache = {}
@@ -97,10 +70,11 @@ class Net(object):
             assert i > -1 #rely on manual caching of i = -1 case
             # tack on bias input
             x = numpy.hstack((eval_alpha(i - 1), 1.0))
-            return sigmoid(psi(eval_alpha(i-1), weights[i]))
+            return sigmoid(psi(x, weights[i]))
         
         @memoise(alpha_prime_cache)
         def eval_alpha_prime(i):
+            assert 0 <= i
             a = eval_alpha(i)
             return a * (1.0 - a)
         
@@ -110,8 +84,8 @@ class Net(object):
             if i == self.n_layers - 1:
                 return eval_alpha_prime(i) * (eval_alpha(i) - y)
             else:
-                delta = numpy.hstack((eval_delta(i + 1), 1.0))
-                return numpy.dot(weights[i], delta) * eval_alpha_prime(i)
+                delta = eval_delta(i + 1)
+                return numpy.dot(weights[i + 1][:, :-1].T, delta) * eval_alpha_prime(i)
 
         @memoise(grad_w_cache)
         def eval_grad_w(i):
@@ -119,6 +93,11 @@ class Net(object):
             x = numpy.hstack((eval_alpha(i), 1.0))
             return numpy.outer(eval_delta(i + 1), x)
         
+        def inspect_cache(name, cache):
+            print '%s cache :' % name
+            for k in sorted(cache):
+                print '\t%s\t%s' % (k, cache[k].shape)
+
         net_grad_w = [0.0] * self.n_layers
         for (x, y) in self.examples:
             alpha_cache[(-1, )] = x
@@ -132,11 +111,11 @@ class Net(object):
         n_examples = len(self.examples)
         r = 0.0
         for i, (x, y) in enumerate(self.examples):
-            activation = [x]
+            a = x
             for w in weights:
-                z = psi(activation[-1], w)
-                activation.append(sigmoid(z))
-            r += numpy.sum((activation[-1] - y) ** 2)
+                z = psi(numpy.hstack((a, 1.0)), w)
+                a = sigmoid(z)
+            r += numpy.sum((a - y) ** 2)
         error_term = 0.5 * r / float(n_examples)
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
@@ -172,21 +151,20 @@ def make_gradient_approx(f, h):
         return approx_g
     return approx_grad_f
      
-
-def test_gradient(f, grad_f, x_0, h, tol):
+def assert_gradient_works(f, grad_f, x_0, h, tol):
     n = len(x_0)
     g = grad_f(x_0)
     approx_grad_f = make_gradient_approx(f, h)
     approx_g = approx_grad_f(x_0)
-    error = sup_norm(g - approx_g)
-    print error
+    error = sup_norm(g - approx_g) / sup_norm(approx_g)
+    print 'g:'
+    print g
+    print 'g_numeric:'
+    print approx_g
+    print 'relative residual:'
+    print (g - approx_g) / numpy.abs(approx_g)
     if error >= tol:
-        print 'g:'
-        print g
-        print 'g_numeric:'
-        print approx_g
-        print 'relative residual:'
-        print (g - approx_g) / numpy.abs(approx_g)
+        raise ValueError('gradient is bad')
 
 def test_flatten_unflatten(net):
     noise = lambda shape : numpy.random.normal(0.0, 1.0, shape)
@@ -195,16 +173,16 @@ def test_flatten_unflatten(net):
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
 def main():
-    m = 5 # n input (& output) nodes
+    m = 2 # n input nodes
     n = 2 # n hidden nodes
+    o = 2 # n output nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
-    y = numpy.random.uniform(-1.0, 1.0, (m, ))
+    y = numpy.random.uniform(-1.0, 1.0, (o, ))
 
     weights = [
         numpy.random.normal(0.0, 0.1, (n, m + 1)),
-        #     numpy.random.normal(0.0, 0.1, (n, n + 1)),
-        numpy.random.normal(0.0, 0.1, (m, n + 1)),
+        numpy.random.normal(0.0, 0.1, (o, n + 1)),
     ]
     
     examples = [(x, y)] * 17
@@ -219,13 +197,19 @@ def main():
         print '-- obj : %e' % obj
         return obj
 
-    grad_f = lambda w : net.flatten_weights(net.evaluate_gradient(net.unflatten_weights(w)))
-    # grad_f = make_gradient_approx(f, h = 1e-5)
+    grad_f = lambda w : net.flatten_weights(
+        net.evaluate_gradient(net.unflatten_weights(w))
+    )
 
     test_flatten_unflatten(net)
+    assert_gradient_works(
+        f,
+        grad_f,
+        net.flatten_weights(weights),
+        h = 1.0e-4,
+        tol = 1.0e-5
+    )
 
-    test_gradient(f, grad_f, net.flatten_weights(weights), h = 1.0e-4, tol = 1.0e-5)
-    
     print 'minimise via cg'
     w_opt = scipy.optimize.fmin_cg(
         f = f,
