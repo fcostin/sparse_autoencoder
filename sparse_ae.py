@@ -36,7 +36,7 @@ def kl_div_prime(p, q):
     return -p/q + (1.0 - p)/(1.0 - q)
 
 class Net(object):
-    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, rho = 0.05, examples = None):
+    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, rho = 0.05, examples = None, verbose = False):
         self.n_layers = len(layer_shapes)
         self.layer_shapes = layer_shapes
         self.layer_sizes = map(numpy.product, layer_shapes)
@@ -48,6 +48,7 @@ class Net(object):
             examples = []
         self.examples = examples
         self.n_examples = len(examples)
+        self.verbose = verbose
         super(Net, self).__init__()
 
     def flatten_weights(self, weights):
@@ -166,6 +167,13 @@ class Net(object):
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
         objective = error_term + self.lmbda * penalty_term + sparsity_penalty_term
+        if self.verbose:
+            print 'J\tNET\t%.8e\tmse\t%.2e\tcoef\t%.2e\tsparsity\t%.2e' % (
+                objective,
+                error_term,
+                self.lmbda * penalty_term,
+                sparsity_penalty_term,
+            )
         return objective
 
     def grad_obj_from_grad_w(self, weights, grad_w):
@@ -225,30 +233,40 @@ def lbfgs(f_and_grad_f, x_0):
     w_opt, obj_opt, info = scipy.optimize.fmin_l_bfgs_b(
         func = f_and_grad_f,
         x0 = x_0,
+        factr = 1e12, # factor for tolerance between successive func values, 1e7 is moderate accuracy
     )
     if info['warnflag'] != 0:
         raise RuntimeError('cvgc failure, warnflag is %d' % info['warnflag'])
     return (w_opt, obj_opt)
 
 def main():
-    m = 7 # n input nodes
-    n = 2 # n hidden nodes
-    o = 11 # n output nodes
-
-    x = numpy.random.uniform(-1.0, 1.0, (m, ))
-    y = numpy.random.uniform(-1.0, 1.0, (o, ))
+    m = 100 # n input nodes
+    n = 50 # n hidden nodes
+    o = 100 # n output nodes
 
     weights = [
-        numpy.random.normal(0.0, 0.1, (n, m + 1)),
-        numpy.random.normal(0.0, 0.1, (o, n + 1)),
+        numpy.random.normal(0.0, 0.01, (n, m + 1)),
+        numpy.random.normal(0.0, 0.01, (o, n + 1)),
     ]
     
-    examples = [(x, y)] * 17
+    n_examples = 20000
+    examples = []
+    for i in xrange(n_examples):
+        x = numpy.random.uniform(-1.0, 1.0, (m, ))
+        y = numpy.random.uniform(-1.0, 1.0, (o, ))
+        examples.append((x, y))
 
-    net = Net(map(lambda x : x.shape, weights), lmbda = 0.1, beta = 0.1, examples = examples)
+    net = Net(
+        map(lambda x : x.shape, weights),
+        lmbda = 1.0,
+        beta = 1.0,
+        examples = examples,
+        verbose = True,
+    )
 
     # enable to sanity-check consistency of objective and gradient
-    if True:
+    if False:
+        print 'checking consistency of objective and gradient'
         def test_f(flat_w):
             w = net.unflatten_weights(flat_w)
             f, _ = net.evaluate_objective_and_gradient(w)
@@ -266,11 +284,11 @@ def main():
             h = 1.0e-4,
             tol = 1.0e-5,
         )
+        print '\tobjective & gradient are approximately consistent'
 
     def f_and_grad_f(flat_w):
         w = net.unflatten_weights(flat_w)
         f, grad_f = net.evaluate_objective_and_gradient(w)
-        print '-- obj : %e' % f
         return (f, net.flatten_weights(grad_f))
 
     if False:
