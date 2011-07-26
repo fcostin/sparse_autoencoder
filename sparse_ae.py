@@ -66,6 +66,42 @@ class Net(object):
             i += size
         return weights
 
+    def make_alpha(self, weights, x):
+        # seed inputs with x then compute forward pass
+        alpha = {-1 : x}
+        for i in xrange(self.n_layers):
+            z = numpy.hstack((alpha[i - 1], 1.0))
+            alpha[i] = sigmoid(numpy.dot(weights[i], z))
+        return alpha
+    
+    def make_alpha_prime(self, alpha):
+        # compute alpha_prime for back pass
+        alpha_prime = {}
+        for i in xrange(self.n_layers - 1, -1, -1):
+            alpha_prime[i] = alpha[i] * (1.0 - alpha[i])
+        return alpha_prime
+
+    def make_delta(self, weights, y, alpha, alpha_prime, delta_bias = None):
+        # compute delta for back pass
+        delta = {}
+        for i in xrange(self.n_layers - 1, -1, -1):
+            if i == self.n_layers - 1:
+                delta[i] = alpha_prime[i] * (alpha[i] - y)
+            else:
+                z = numpy.dot(weights[i + 1][:, :-1].T, delta[i + 1])
+                if delta_bias and i in delta_bias:
+                    z += delta_bias[i]
+                delta[i] = z * alpha_prime[i]
+        return delta
+    
+    def make_grad_w(self, alpha, delta):
+        # compute grad_w for back pass
+        grad_w = {}
+        for i in xrange(self.n_layers - 1, -1, -1):
+            z = numpy.hstack((alpha[i - 1], 1.0))
+            grad_w[i - 1] = numpy.outer(delta[i], z)
+        return grad_w
+
     def propagate(self, weights, prop_back, delta_bias = None):
         """
         arguments:
@@ -81,62 +117,19 @@ class Net(object):
             i-th weight array, giving the corresponding partial derivatives.
         """
 
-        # i am too paranoid to try and explicitly order these computations
-        # so i use a ridiculous scheme of cached mutually recursive functions
-        alpha_cache = {}
-        alpha_prime_cache = {}
-        delta_cache = {}
-        grad_w_cache = {}
-
-        cachery = (alpha_cache, alpha_prime_cache, delta_cache, grad_w_cache)
-
-        @memoise(alpha_cache)
-        def eval_alpha(i):
-            assert i > -1 #rely on manual caching of i = -1 case
-            # tack on bias input
-            x = numpy.hstack((eval_alpha(i - 1), 1.0))
-            return sigmoid(numpy.dot(weights[i], x))
-        
-        @memoise(alpha_prime_cache)
-        def eval_alpha_prime(i):
-            assert 0 <= i
-            a = eval_alpha(i)
-            return a * (1.0 - a)
-        
-        @memoise(delta_cache)
-        def eval_delta(i):
-            assert 0 <= i < self.n_layers
-            if i == self.n_layers - 1:
-                return eval_alpha_prime(i) * (eval_alpha(i) - y)
-            else:
-                delta = eval_delta(i + 1)
-                x = numpy.dot(weights[i + 1][:, :-1].T, delta)
-                if delta_bias and i in delta_bias:
-                    x += delta_bias[i]
-                return x * eval_alpha_prime(i)
-
-        @memoise(grad_w_cache)
-        def eval_grad_w(i):
-            assert -1 <= i < self.n_layers -1
-            x = numpy.hstack((eval_alpha(i), 1.0))
-            return numpy.outer(eval_delta(i + 1), x)
-        
         net_grad_w = [0.0] * self.n_layers
         net_square_error = 0.0
         for (x, y) in self.examples:
-            # seed inputs
-            alpha_cache[(-1, )] = x
-            if prop_back:
-                # update gradient
-                for i in xrange(self.n_layers):
-                    net_grad_w[i] += eval_grad_w(i - 1)
+            alpha = self.make_alpha(weights, x)
+            alpha_prime = self.make_alpha_prime(alpha)
+            delta = self.make_delta(weights, y, alpha, alpha_prime)
+            grad_w = self.make_grad_w(alpha, delta)
+            # accumulate into net weight derivatives
+            for i in xrange(self.n_layers - 1, -1, -1):
+                net_grad_w[i] += grad_w[i - 1]
             # update objective
-            y_pred = eval_alpha(self.n_layers - 1)
+            y_pred = alpha[self.n_layers - 1]
             net_square_error += numpy.sum((y_pred - y) ** 2)
-            # clear caches
-            for cache in cachery:
-                cache.clear()
-        
         if prop_back:
             return net_square_error, net_grad_w
         else:
@@ -215,9 +208,9 @@ def lbfgs(f_and_grad_f, x_0):
     return (w_opt, obj_opt)
 
 def main():
-    m = 10 # n input nodes
-    n = 5 # n hidden nodes
-    o = 10 # n output nodes
+    m = 7 # n input nodes
+    n = 2 # n hidden nodes
+    o = 11 # n output nodes
 
     x = numpy.random.uniform(-1.0, 1.0, (m, ))
     y = numpy.random.uniform(-1.0, 1.0, (o, ))
@@ -227,12 +220,12 @@ def main():
         numpy.random.normal(0.0, 0.1, (o, n + 1)),
     ]
     
-    examples = [(x, y)] * 170
+    examples = [(x, y)] * 17
 
     net = Net(map(lambda x : x.shape, weights), lmbda = 0.1, examples = examples)
 
     # enable to sanity-check consistency of objective and gradient
-    if False:
+    if True:
         def test_f(flat_w):
             w = net.unflatten_weights(flat_w)
             f, _ = net.evaluate_objective_and_gradient(w)
