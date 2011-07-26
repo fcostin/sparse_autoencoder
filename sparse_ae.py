@@ -66,10 +66,11 @@ class Net(object):
             i += size
         return weights
 
-    def backprop(self, weights, delta_bias = None):
+    def propagate(self, weights, prop_back, delta_bias = None):
         """
         arguments:
             weights : list of 2d weight arrays (matrices)
+            prop_back : bool, should we backprop after forwardprop?
             delta_bias : (optional) mapping of int -> bias vector, where
                 the integer k satisifies 0 <= k < n_layers
                 and, if present, the shape of the bias vector for a layer
@@ -80,6 +81,8 @@ class Net(object):
             i-th weight array, giving the corresponding partial derivatives.
         """
 
+        # i am too paranoid to try and explicitly order these computations
+        # so i use a ridiculous scheme of cached mutually recursive functions
         alpha_cache = {}
         alpha_prime_cache = {}
         delta_cache = {}
@@ -118,40 +121,39 @@ class Net(object):
             x = numpy.hstack((eval_alpha(i), 1.0))
             return numpy.outer(eval_delta(i + 1), x)
         
-        def inspect_cache(name, cache):
-            print '%s cache :' % name
-            for k in sorted(cache):
-                print '\t%s\t%s' % (k, cache[k].shape)
-
         net_grad_w = [0.0] * self.n_layers
+        net_square_error = 0.0
         for (x, y) in self.examples:
+            # seed inputs
             alpha_cache[(-1, )] = x
-            for i in xrange(self.n_layers):
-                net_grad_w[i] += eval_grad_w(i - 1)
+            if prop_back:
+                # update gradient
+                for i in xrange(self.n_layers):
+                    net_grad_w[i] += eval_grad_w(i - 1)
+            # update objective
+            y_pred = eval_alpha(self.n_layers - 1)
+            net_square_error += numpy.sum((y_pred - y) ** 2)
+            # clear caches
             for cache in cachery:
                 cache.clear()
-        return net_grad_w
-
-    def evaluate_objective(self, weights):
+        
+        if prop_back:
+            return net_square_error, net_grad_w
+        else:
+            return net_square_error
+    
+    def obj_from_net_square_error(self, weights, net_square_error):
         n_examples = len(self.examples)
-        r = 0.0
-        for i, (x, y) in enumerate(self.examples):
-            a = x
-            for w in weights:
-                z = numpy.dot(w, numpy.hstack((a, 1.0)))
-                a = sigmoid(z)
-            r += numpy.sum((a - y) ** 2)
-        error_term = 0.5 * r / float(n_examples)
+        # compute objective function from net square error
+        error_term = 0.5 * net_square_error / float(n_examples)
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
-        obj = error_term + self.lmbda * penalty_term
-        return obj
-    
-    def evaluate_gradient(self, weights):
+        objective = error_term + self.lmbda * penalty_term
+        return objective
+
+    def grad_obj_from_grad_w(self, weights, grad_w):
         n_examples = len(self.examples)
-        if n_examples < 1:
-            raise ValueError('need at least 1 example')
-        grad_w = self.backprop(weights)
+        # compute grad objective in terms of gradient of net square error
         grad_objective = []
         for i in xrange(self.n_layers):
             w_i = grad_w[i][:, :-1]
@@ -164,6 +166,20 @@ class Net(object):
                 ))
             )
         return grad_objective
+
+    def evaluate_objective(self, weights):
+        net_square_error = self.propagate(weights, prop_back = False)
+        return self.obj_from_net_square_error(weights, net_square_error)
+
+    def evaluate_gradient(self, weights):
+        _, grad_w = self.propagate(weights, prop_back = True)
+        return self.grad_obj_from_grad_w(weights, grad_w)
+
+    def evaluate_objective_and_gradient(self, weights):
+        net_square_error, grad_w = self.propagate(weights, prop_back = True)
+        obj = self.obj_from_net_square_error(weights, net_square_error)
+        grad_obj = self.grad_obj_from_grad_w(weights, grad_w)
+        return obj, grad_obj
 
 def make_gradient_approx(f, h):
     def approx_grad_f(x_0):
@@ -197,11 +213,10 @@ def test_flatten_unflatten(net):
     weights_tilde = net.unflatten_weights(net.flatten_weights(weights))
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
-def lbfgs(f, grad_f, x_0):
+def lbfgs(f_and_grad_f, x_0):
     w_opt, obj_opt, info = scipy.optimize.fmin_l_bfgs_b(
-        func = f,
+        func = f_and_grad_f,
         x0 = x_0,
-        fprime = grad_f,
     )
     if info['warnflag'] != 0:
         raise RuntimeError('cvgc failure, warnflag is %d' % info['warnflag'])
@@ -222,19 +237,33 @@ def main():
     
     examples = [(x, y)] * 170
 
-    net = Net(map(lambda x : x.shape, weights), lmbda = 0.0, examples = examples)
-    print 'evaluate objective'
-    obj = net.evaluate_objective(weights)
-    print '\tobj %s' % str(obj)
+    net = Net(map(lambda x : x.shape, weights), lmbda = 0.1, examples = examples)
 
-    def f(w):
-        obj = net.evaluate_objective(net.unflatten_weights(w))
-        print '-- obj : %e' % obj
-        return obj
+    # enable to sanity-check consistency of objective and gradient
+    if False:
+        def test_f(flat_w):
+            w = net.unflatten_weights(flat_w)
+            f, _ = net.evaluate_objective_and_gradient(w)
+            return f
 
-    grad_f = lambda w : net.flatten_weights(
-        net.evaluate_gradient(net.unflatten_weights(w))
-    )
+        def test_grad_f(flat_w):
+            w = net.unflatten_weights(flat_w)
+            _, grad_f = net.evaluate_objective_and_gradient(w)
+            return net.flatten_weights(grad_f)
+
+        assert_gradient_works(
+            test_f,
+            test_grad_f,
+            net.flatten_weights(weights),
+            h = 1.0e-4,
+            tol = 1.0e-5,
+        )
+
+    def f_and_grad_f(flat_w):
+        w = net.unflatten_weights(flat_w)
+        f, grad_f = net.evaluate_objective_and_gradient(w)
+        print '-- obj : %e' % f
+        return (f, net.flatten_weights(grad_f))
 
     if False:
         test_flatten_unflatten(net)
@@ -247,7 +276,7 @@ def main():
         )
 
     print 'minimising objective with l-bfgs'
-    w_opt, obj_opt = lbfgs(f, grad_f, net.flatten_weights(weights))
+    w_opt, obj_opt = lbfgs(f_and_grad_f, net.flatten_weights(weights))
     print 'obj_opt : %s' % str(obj_opt)
 
 def profile(func):
