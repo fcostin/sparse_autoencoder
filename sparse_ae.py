@@ -167,14 +167,6 @@ class Net(object):
             )
         return grad_objective
 
-    def evaluate_objective(self, weights):
-        net_square_error = self.propagate(weights, prop_back = False)
-        return self.obj_from_net_square_error(weights, net_square_error)
-
-    def evaluate_gradient(self, weights):
-        _, grad_w = self.propagate(weights, prop_back = True)
-        return self.grad_obj_from_grad_w(weights, grad_w)
-
     def evaluate_objective_and_gradient(self, weights):
         net_square_error, grad_w = self.propagate(weights, prop_back = True)
         obj = self.obj_from_net_square_error(weights, net_square_error)
