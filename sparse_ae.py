@@ -1,5 +1,6 @@
 import numpy
 import scipy.optimize
+import itertools
 
 def memoise(cache = None):
     if cache is None:
@@ -36,18 +37,21 @@ def kl_div_prime(p, q):
     return -p/q + (1.0 - p)/(1.0 - q)
 
 class Net(object):
-    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, rho = 0.05, examples = None, verbose = False):
+    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, rho = 0.05, examples = None, example_weights = None, verbose = False):
         self.n_layers = len(layer_shapes)
         self.layer_shapes = layer_shapes
         self.layer_sizes = map(numpy.product, layer_shapes)
         self.n_weights = sum(self.layer_sizes)
         self.lmbda = lmbda
         self.beta = beta
-        self.rho = 0.05
+        self.rho = rho
         if examples is None:
             examples = []
         self.examples = examples
-        self.n_examples = len(examples)
+        if example_weights is None:
+            example_weights = numpy.ones((len(self.examples), ), dtype = numpy.int)
+        self.example_weights = example_weights
+        self.net_example_weight = float(numpy.sum(self.example_weights))
         self.verbose = verbose
         super(Net, self).__init__()
 
@@ -108,14 +112,14 @@ class Net(object):
     def make_rho_hat(self, weights):
         # compute mean activity over all training inputs for each hidden node
         rho_hat = {}
-        for (x, y) in self.examples:
+        for (x, y), example_weight in itertools.izip(self.examples, self.example_weights):
             alpha = self.make_alpha(weights, x)
             # only apply this penalty to hidden layers:
             # ignore first (i == -1) and last (i == self.n_layers - 1)
             for i in xrange(self.n_layers - 1):
-                rho_hat[i] = rho_hat.get(i, 0.0) + alpha[i]
+                rho_hat[i] = rho_hat.get(i, 0.0) + example_weight * alpha[i]
         for i in rho_hat:
-            rho_hat[i] = rho_hat[i] / float(self.n_examples)
+            rho_hat[i] = rho_hat[i] / self.net_example_weight
         return rho_hat
 
     def propagate(self, weights):
@@ -147,23 +151,23 @@ class Net(object):
 
         net_grad_w = [0.0] * self.n_layers
         net_square_error = 0.0
-        for (x, y) in self.examples:
+        for (x, y), example_weight in itertools.izip(self.examples, self.example_weights):
             alpha = self.make_alpha(weights, x)
             alpha_prime = self.make_alpha_prime(alpha)
             delta = self.make_delta(weights, y, alpha, alpha_prime, delta_bias)
             grad_w = self.make_grad_w(alpha, delta)
             # accumulate into net weight derivatives
             for i in xrange(self.n_layers - 1, -1, -1):
-                net_grad_w[i] += grad_w[i - 1]
+                net_grad_w[i] += example_weight * grad_w[i - 1]
             # update objective
             y_pred = alpha[self.n_layers - 1]
-            net_square_error += numpy.sum((y_pred - y) ** 2)
+            net_square_error += example_weight * numpy.sum((y_pred - y) ** 2)
 
         return net_square_error, net_grad_w, sparsity_penalty_term
     
     def obj_from_net_square_error(self, weights, net_square_error, sparsity_penalty_term):
         # compute objective function from net square error
-        error_term = 0.5 * net_square_error / float(self.n_examples)
+        error_term = 0.5 * net_square_error / self.net_example_weight
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
         objective = error_term + self.lmbda * penalty_term + sparsity_penalty_term
@@ -185,8 +189,8 @@ class Net(object):
             # n.b. weights for bias nodes are excempt from regularisation
             grad_objective.append(
                 numpy.hstack((
-                    (w_i / float(self.n_examples)) + self.lmbda * weights[i][:, :-1],
-                    (bias_i / float(self.n_examples))[:, numpy.newaxis],
+                    (w_i / self.net_example_weight) + self.lmbda * weights[i][:, :-1],
+                    (bias_i / self.net_example_weight)[:, numpy.newaxis],
                 ))
             )
         return grad_objective
@@ -240,16 +244,16 @@ def lbfgs(f_and_grad_f, x_0):
     return (w_opt, obj_opt)
 
 def main():
-    m = 100 # n input nodes
-    n = 50 # n hidden nodes
-    o = 100 # n output nodes
+    m = 9 # n input nodes
+    n = 5 # n hidden nodes
+    o = 17 # n output nodes
 
     weights = [
         numpy.random.normal(0.0, 0.01, (n, m + 1)),
         numpy.random.normal(0.0, 0.01, (o, n + 1)),
     ]
     
-    n_examples = 20000
+    n_examples = 20
     examples = []
     for i in xrange(n_examples):
         x = numpy.random.uniform(-1.0, 1.0, (m, ))
@@ -265,7 +269,7 @@ def main():
     )
 
     # enable to sanity-check consistency of objective and gradient
-    if False:
+    if True:
         print 'checking consistency of objective and gradient'
         def test_f(flat_w):
             w = net.unflatten_weights(flat_w)
