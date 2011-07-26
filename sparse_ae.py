@@ -36,16 +36,18 @@ def kl_div_prime(p, q):
     return -p/q + (1.0 - p)/(1.0 - q)
 
 class Net(object):
-    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, examples = None):
+    def __init__(self, layer_shapes, lmbda = 0.0, beta = 0.0, rho = 0.05, examples = None):
         self.n_layers = len(layer_shapes)
         self.layer_shapes = layer_shapes
         self.layer_sizes = map(numpy.product, layer_shapes)
         self.n_weights = sum(self.layer_sizes)
         self.lmbda = lmbda
         self.beta = beta
+        self.rho = 0.05
         if examples is None:
             examples = []
         self.examples = examples
+        self.n_examples = len(examples)
         super(Net, self).__init__()
 
     def flatten_weights(self, weights):
@@ -102,27 +104,52 @@ class Net(object):
             grad_w[i - 1] = numpy.outer(delta[i], z)
         return grad_w
 
-    def propagate(self, weights, prop_back, delta_bias = None):
+    def make_rho_hat(self, weights):
+        # compute mean activity over all training inputs for each hidden node
+        rho_hat = {}
+        for (x, y) in self.examples:
+            alpha = self.make_alpha(weights, x)
+            # only apply this penalty to hidden layers:
+            # ignore first (i == -1) and last (i == self.n_layers - 1)
+            for i in xrange(self.n_layers - 1):
+                rho_hat[i] = rho_hat.get(i, 0.0) + alpha[i]
+        for i in rho_hat:
+            rho_hat[i] = rho_hat[i] / float(self.n_examples)
+        return rho_hat
+
+    def propagate(self, weights):
         """
         arguments:
             weights : list of 2d weight arrays (matrices)
-            prop_back : bool, should we backprop after forwardprop?
-            delta_bias : (optional) mapping of int -> bias vector, where
-                the integer k satisifies 0 <= k < n_layers
-                and, if present, the shape of the bias vector for a layer
-                k matches the shape of the delta vector for that k
         returns:
+            (net_square_error, net_grad_w, sparsity_penalty_term)
             list of derivatives of net output with respect to layer weights,
             where the i-th item is a 2d array of the same shape as the
             i-th weight array, giving the corresponding partial derivatives.
         """
+
+        delta_bias = {}
+        sparsity_penalty_term = 0.0
+        if self.beta > 0.0:
+            rho_hat = self.make_rho_hat(weights)
+            # compute derivative of sparsity penalty
+            for i in rho_hat:
+                delta_bias[i] = self.beta * kl_div_prime(
+                    self.rho,
+                    rho_hat[i],
+                )
+            for i in rho_hat:
+                sparsity_penalty_term += numpy.sum(kl_div(self.rho, rho_hat[i]))
+                sparsity_penalty_term *= self.beta
+        elif self.beta < 0.0:
+            raise ValueError('beta must be non-negative')
 
         net_grad_w = [0.0] * self.n_layers
         net_square_error = 0.0
         for (x, y) in self.examples:
             alpha = self.make_alpha(weights, x)
             alpha_prime = self.make_alpha_prime(alpha)
-            delta = self.make_delta(weights, y, alpha, alpha_prime)
+            delta = self.make_delta(weights, y, alpha, alpha_prime, delta_bias)
             grad_w = self.make_grad_w(alpha, delta)
             # accumulate into net weight derivatives
             for i in xrange(self.n_layers - 1, -1, -1):
@@ -130,22 +157,18 @@ class Net(object):
             # update objective
             y_pred = alpha[self.n_layers - 1]
             net_square_error += numpy.sum((y_pred - y) ** 2)
-        if prop_back:
-            return net_square_error, net_grad_w
-        else:
-            return net_square_error
+
+        return net_square_error, net_grad_w, sparsity_penalty_term
     
-    def obj_from_net_square_error(self, weights, net_square_error):
-        n_examples = len(self.examples)
+    def obj_from_net_square_error(self, weights, net_square_error, sparsity_penalty_term):
         # compute objective function from net square error
-        error_term = 0.5 * net_square_error / float(n_examples)
+        error_term = 0.5 * net_square_error / float(self.n_examples)
         # n.b. weights for bias nodes are excempt from regularisation
         penalty_term = 0.5 * numpy.sum(numpy.sum(w[:, :-1] ** 2) for w in weights)
-        objective = error_term + self.lmbda * penalty_term
+        objective = error_term + self.lmbda * penalty_term + sparsity_penalty_term
         return objective
 
     def grad_obj_from_grad_w(self, weights, grad_w):
-        n_examples = len(self.examples)
         # compute grad objective in terms of gradient of net square error
         grad_objective = []
         for i in xrange(self.n_layers):
@@ -154,15 +177,15 @@ class Net(object):
             # n.b. weights for bias nodes are excempt from regularisation
             grad_objective.append(
                 numpy.hstack((
-                    (w_i / float(n_examples)) + self.lmbda * weights[i][:, :-1],
-                    (bias_i / float(n_examples))[:, numpy.newaxis],
+                    (w_i / float(self.n_examples)) + self.lmbda * weights[i][:, :-1],
+                    (bias_i / float(self.n_examples))[:, numpy.newaxis],
                 ))
             )
         return grad_objective
 
     def evaluate_objective_and_gradient(self, weights):
-        net_square_error, grad_w = self.propagate(weights, prop_back = True)
-        obj = self.obj_from_net_square_error(weights, net_square_error)
+        net_square_error, grad_w, sparsity_penalty_term = self.propagate(weights)
+        obj = self.obj_from_net_square_error(weights, net_square_error, sparsity_penalty_term)
         grad_obj = self.grad_obj_from_grad_w(weights, grad_w)
         return obj, grad_obj
 
@@ -222,7 +245,7 @@ def main():
     
     examples = [(x, y)] * 17
 
-    net = Net(map(lambda x : x.shape, weights), lmbda = 0.1, examples = examples)
+    net = Net(map(lambda x : x.shape, weights), lmbda = 0.1, beta = 0.1, examples = examples)
 
     # enable to sanity-check consistency of objective and gradient
     if True:
