@@ -201,6 +201,16 @@ class Net(object):
         grad_obj = self.grad_obj_from_grad_w(weights, grad_w)
         return obj, grad_obj
 
+    def predict(self, weights, inputs):
+        for w, s in itertools.izip(weights, self.layer_shapes):
+            if numpy.shape(w) != s:
+                raise ValueError('weights shape mismatch')
+        predictions = []
+        for x in inputs:
+            alpha = self.make_alpha(weights, x)
+            predictions.append(alpha[self.n_layers - 1])
+        return predictions
+
 def make_gradient_approx(f, h):
     def approx_grad_f(x_0):
         n = len(x_0)
@@ -233,14 +243,18 @@ def test_flatten_unflatten(net):
     weights_tilde = net.unflatten_weights(net.flatten_weights(weights))
     assert all(numpy.all(x == y) for (x, y) in zip(weights, weights_tilde))
 
-def lbfgs(f_and_grad_f, x_0):
+def lbfgs(f_and_grad_f, x_0, max_iters = 100):
     w_opt, obj_opt, info = scipy.optimize.fmin_l_bfgs_b(
         func = f_and_grad_f,
         x0 = x_0,
         factr = 1e12, # factor for tolerance between successive func values, 1e7 is moderate accuracy
+        maxfun = max_iters,
     )
     if info['warnflag'] != 0:
-        raise RuntimeError('cvgc failure, warnflag is %d' % info['warnflag'])
+        if info['warnflag'] == 1:
+            print 'L_BFGS_B : warning, max specified iterations exceeded'
+        else:
+            raise RuntimeError('cvgc failure, warnflag is %d' % info['warnflag'])
     return (w_opt, obj_opt)
 
 def main():
