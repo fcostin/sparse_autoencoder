@@ -1,0 +1,7 @@
+stuffing about attempting to get some kind of sparse autoencoder up and running
+
+this one is based upon Andrew Ng's CS294A lecture notes.
+
+there also seem to be a few interesting papers in the literature regarding stacked | denoising autoencoders that might be worth checking out.
+
+currently I haven't managed to make it work very well - the idea of the thing is that it's meant to take the effort out of manually constructing features suitable for supervised learning algorithms - but I'm getting the impression it just shifts the difficulty to manually constructing features suitable for unsupervised learning algorthims. Yeah!
